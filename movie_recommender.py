@@ -8,8 +8,13 @@ import dotenv
 import time
 from typing import Dict, List, Any, Optional, Union
 import sys
+import re # Added missing import
+import logging # Added logging
 
-# ANSI color codes for terminal output
+# Setup basic logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# ANSI color codes for terminal output (kept for potential direct script use, but won't show colors via Flask logs)
 class Colors:
     HEADER = '\033[95m'
     BLUE = '\033[94m'
@@ -28,24 +33,24 @@ def check_ollama_status() -> bool:
         # First check if Ollama is installed and running
         response = requests.get("http://localhost:11434/api/tags", timeout=5)
         if response.status_code == 200:
-            print(f"\n{Colors.GREEN}Ollama is running and available.{Colors.ENDC}")
+            logging.info("Ollama is running and available.")
             return True
         else:
-            print(f"\n{Colors.YELLOW}Ollama is responding but returned status code: {response.status_code}{Colors.ENDC}")
+            logging.warning(f"Ollama is responding but returned status code: {response.status_code}")
             return False
     except requests.exceptions.ConnectionError:
-        print(f"\n{Colors.YELLOW}Ollama connection failed. Make sure Ollama is installed and running.{Colors.ENDC}")
-        print(f"{Colors.YELLOW}Installation instructions: https://ollama.ai/download{Colors.ENDC}")
-        print(f"{Colors.YELLOW}After installing, start Ollama and try again.{Colors.ENDC}")
+        logging.warning("Ollama connection failed. Make sure Ollama is installed and running.")
+        logging.warning("Installation instructions: https://ollama.ai/download")
+        logging.warning("After installing, start Ollama and try again.")
         return False
     except requests.exceptions.Timeout:
-        print(f"\n{Colors.YELLOW}Ollama connection timed out. The service might be starting up or overloaded.{Colors.ENDC}")
+        logging.warning("Ollama connection timed out. The service might be starting up or overloaded.")
         return False
     except requests.exceptions.RequestException as e:
-        print(f"\n{Colors.YELLOW}Ollama error: {str(e)}{Colors.ENDC}")
+        logging.error(f"Ollama error: {str(e)}")
         return False
 
-# Function to get movie details from user input
+# Function to get movie details from user input (kept for potential direct script use)
 def get_movie_input() -> tuple:
     """Get movie title and year from user input"""
     print(f"{Colors.HEADER}{Colors.BOLD}🎬 AI Movie Recommendation System 🎬{Colors.ENDC}")
@@ -63,8 +68,9 @@ def get_api_key() -> Optional[str]:
     api_key = os.getenv("TMDB_API_KEY")
     
     if not api_key:
-        print(f"{Colors.RED}Error: TMDB_API_KEY not found in environment variables.{Colors.ENDC}")
-        print("Please create a .env file with your TMDB API key in the format: TMDB_API_KEY=your_key_here")
+        logging.error("Error: TMDB_API_KEY not found in environment variables.")
+        logging.error("Please create a .env file with your TMDB API key in the format: TMDB_API_KEY=your_key_here")
+        # Removed print statements
     
     return api_key
 
@@ -75,7 +81,7 @@ def search_movie(movie_title: str, year: str = "") -> Optional[Dict[str, Any]]:
     if not api_key:
         return None
     
-    print(f"\n{Colors.CYAN}Searching for '{movie_title}'...{Colors.ENDC}")
+    logging.info(f"Searching for '{movie_title}'{(' from ' + year) if year else ''}...")
     
     search_url = "https://api.themoviedb.org/3/search/movie"
     params = {
@@ -94,16 +100,16 @@ def search_movie(movie_title: str, year: str = "") -> Optional[Dict[str, Any]]:
         search_results = response.json()
         
         if not search_results.get("results") or len(search_results["results"]) == 0:
-            print(f"{Colors.RED}No movies found matching '{movie_title}'{' from ' + year if year else ''}.{Colors.ENDC}")
+            logging.warning(f"No movies found matching '{movie_title}'{' from ' + year if year else ''}.")
             return None
         
         # Get the first result
         movie = search_results["results"][0]
-        print(f"{Colors.GREEN}Found movie: {Colors.BOLD}{movie['title']} ({movie.get('release_date', 'Unknown')[:4]}){Colors.ENDC}")
+        logging.info(f"Found movie: {movie['title']} ({movie.get('release_date', 'Unknown')[:4]})")
         return movie
     
     except requests.exceptions.RequestException as e:
-        print(f"{Colors.RED}Error searching for movie: {str(e)}{Colors.ENDC}")
+        logging.error(f"Error searching for movie: {str(e)}")
         return None
 
 # Function to get detailed movie information
@@ -123,13 +129,237 @@ def get_movie_details(movie_id: int) -> Optional[Dict[str, Any]]:
     try:
         response = requests.get(details_url, params=params)
         response.raise_for_status()
+        logging.info(f"Successfully retrieved details for movie ID: {movie_id}")
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"{Colors.RED}Error getting movie details: {str(e)}{Colors.ENDC}")
+        logging.error(f"Error getting movie details for ID {movie_id}: {str(e)}")
         return None
 
 # Function to create a taste profile based on a movie
-def create_taste_profile(movie: Dict[str, Any], movie_details: Dict[str, Any]) -> Dict[str, Any]:
+# Add these imports at the top of the file
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+# Add this function to check Gemini API status
+def check_gemini_status() -> bool:
+    """Check if Gemini API key is available and working"""
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY")
+    
+    if not api_key:
+        print(f"{Colors.RED}Error: GEMINI_API_KEY not found in environment variables.{Colors.ENDC}")
+        return False
+    
+    try:
+        # Configure the Gemini API
+        genai.configure(api_key=api_key)
+        # Simple test call
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content("Hello")
+        return True
+    except Exception as e:
+        print(f"{Colors.RED}Error connecting to Gemini API: {str(e)}{Colors.ENDC}")
+        return False
+
+# Add this function to enhance tags using Gemini
+def enhance_tags_with_gemini(taste_profile: Dict[str, Any]) -> List[str]:
+    """Use Google's Gemini API to analyze movie details and generate more relevant tags"""
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY")
+    
+    if not api_key:
+        print(f"{Colors.RED}Error: GEMINI_API_KEY not found in environment variables.{Colors.ENDC}")
+        return []
+    
+    try:
+        # Extract data from taste_profile
+        movie_title = taste_profile.get("movie", "")
+        overview = taste_profile.get("overview", "")
+        genres = taste_profile.get("genres", [])  # Fixed: access from taste_profile
+        existing_keywords = taste_profile.get("keywords", [])
+        directors = taste_profile.get("directors", [])
+        cast = taste_profile.get("cast", [])
+        
+        if not overview:
+            return []
+        
+        print(f"Analyzing movie themes with Gemini...")
+        
+        # Configure the Gemini API
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.0-pro') # Corrected model name
+        
+        # Prepare prompt for Gemini
+        prompt = f"""
+        Analyze this movie and extract 10-15 thematic tags focusing on:
+        { "Genres and atmosphere" if '1' in taste_profile.get('preferences', []) else "" }
+        { "Directing style and cinematography" if '2' in taste_profile.get('preferences', []) else "" }
+        { "Story elements and plot structure" if '3' in taste_profile.get('preferences', []) else "" }
+        
+        Title: {movie_title}
+        Director(s): {', '.join(directors)}
+        Cast: {', '.join(cast)}
+        Genres: {', '.join(genres)}
+        
+        Plot summary: {overview}
+        
+        Return a JSON object with two fields: 
+        - "tags": an array of thematic tags (single words or short phrases)
+        - "analysis": brief (50-word) explanation of thematic connections
+        
+        Example format:
+        {{"tags": ["coming of age", "friendship", "loss", "redemption", "identity"], 
+         "analysis": "A poignant exploration of adolescent identity through friendship and loss."}}
+        """
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
+        response_text = response.text
+        
+        try:
+            # Parse the JSON response
+            # Imports moved to top level
+            
+            # Try to extract JSON from the response
+            json_match = re.search(r'({.*})', response_text, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group(1))
+                tags = result.get("tags", [])
+                analysis = result.get("analysis", "")
+                
+                if analysis:
+                    print(f"\n{Colors.GREEN}Theme Analysis:{Colors.ENDC} {analysis}")
+                
+                return tags
+            else:
+                # Fallback: try to extract comma-separated tags
+                tags = [tag.strip() for tag in response_text.split(',') if tag.strip()]
+                return tags
+                
+        except json.JSONDecodeError:
+            # If JSON parsing fails, try to extract tags directly
+            tags = [tag.strip() for tag in response_text.split(',') if tag.strip()]
+            return tags
+            
+    except Exception as e:
+        print(f"{Colors.RED}Error using Gemini for tag enhancement: {str(e)}{Colors.ENDC}")
+        return []
+
+# Add this function to get recommendations using Gemini
+def get_gemini_recommendations(taste_profile: Dict[str, Any], all_recommendations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Use Google's Gemini API to rank and personalize recommendations"""
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY")
+    
+    if not api_key or not all_recommendations:
+        return all_recommendations[:10]  # Return top 10 without ranking
+    
+    try:
+        # Extract information from taste_profile
+        movie_title = taste_profile.get("movie", "")
+        overview = taste_profile.get("overview", "")
+        genres = taste_profile.get("genres", [])  # Fixed: access from taste_profile
+        keywords = taste_profile.get("keywords", [])
+        enhanced_keywords = taste_profile.get("enhanced_keywords", [])
+        
+        # Prepare movie data for ranking
+        movie_data = []
+        for movie in all_recommendations[:15]:  # Limit to top 15 for Gemini processing
+            movie_data.append({
+                "id": movie["id"],
+                "title": movie["title"],
+                "overview": movie["overview"][:200] + "..." if len(movie["overview"]) > 200 else movie["overview"],
+                "release_date": movie.get("release_date", "Unknown"),
+                "vote_average": movie.get("vote_average", 0)
+            })
+        
+        print(f"Using Gemini to personalize recommendations...")
+        
+        # Configure the Gemini API
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.0-pro') # Corrected model name
+        
+        # Enhanced prompt with preferences
+        preference_context = []
+        if '1' in taste_profile.get('preferences', []):
+            preference_context.append("Prioritize similar genres and atmosphere")
+        if '2' in taste_profile.get('preferences', []):
+            preference_context.append("Focus on directorial style and cinematography")
+        if '3' in taste_profile.get('preferences', []):
+            preference_context.append("Emphasize story structure and thematic elements")
+        
+        # Prepare prompt for Gemini
+        prompt = f"""
+        Rank these movies based on similarity to the user's taste profile.
+        
+        User's original movie: {movie_title}
+        Plot summary: {overview}
+        Genres: {', '.join(genres)}
+        Themes: {', '.join(keywords[:7] if keywords else [])}
+        Enhanced themes: {', '.join(enhanced_keywords[:7] if enhanced_keywords else [])}
+        
+        User preferences: {', '.join(preference_context) if preference_context else "No specific preferences"}
+        
+        Here are the movies to rank (JSON array):
+        {json.dumps(movie_data)}
+        
+        Return a JSON array with the movies ranked from most to least relevant to the user's taste.
+        Each object should have 'id' and 'relevance_score' (0-100) fields.
+        Example: [{{"id": 123, "relevance_score": 95}}, {{"id": 456, "relevance_score": 80}}]
+        
+        Only return the JSON array, no other text.
+        """
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
+        response_text = response.text
+        
+        try:
+            # Parse the JSON response
+            # Imports moved to top level
+            
+            # Try to extract JSON from the response
+            json_match = re.search(r'(\[.*\])', response_text, re.DOTALL)
+            if json_match:
+                ranked_movies = json.loads(json_match.group(1))
+                
+                # Validate response format
+                if not all(["id" in m and "relevance_score" in m for m in ranked_movies]):
+                    raise ValueError("Invalid response format from Gemini")
+                
+                # Create mapping of movie IDs to full data
+                movie_map = {movie["id"]: movie for movie in all_recommendations}
+                
+                # Sort recommendations based on Gemini's ranking
+                sorted_recommendations = []
+                for ranked_movie in ranked_movies:
+                    movie_id = ranked_movie["id"]
+                    if movie_id in movie_map:
+                        sorted_recommendations.append({
+                            **movie_map[movie_id],
+                            "relevance_score": ranked_movie["relevance_score"]
+                        })
+                
+                # Filter out low relevance scores
+                filtered_recommendations = [m for m in sorted_recommendations if m.get("relevance_score", 0) >= 60]
+                
+                # If filtering removed too many, use the original sorted list
+                if len(filtered_recommendations) < 5 and sorted_recommendations:
+                    return sorted_recommendations[:10]
+                    
+                return filtered_recommendations[:10]  # Return top 10 ranked results
+            
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"{Colors.RED}Error parsing Gemini response: {str(e)}{Colors.ENDC}")
+            return all_recommendations[:10]  # Fallback to original list
+        
+        return all_recommendations[:10]
+    
+    except Exception as e:
+        print(f"{Colors.RED}Error in Gemini ranking: {str(e)}{Colors.ENDC}")
+        return all_recommendations[:10]
+
+def create_taste_profile(movie: Dict[str, Any], movie_details: Dict[str, Any], interactive: bool = True) -> Dict[str, Any]:
     """Create a taste profile based on movie details"""
     # Extract genres
     genres = [genre["name"] for genre in movie_details.get("genres", [])]
@@ -161,43 +391,48 @@ def create_taste_profile(movie: Dict[str, Any], movie_details: Dict[str, Any]) -
         "vote_average": movie_details.get("vote_average", "N/A")
     }
     
-    # Display taste profile information
-    print(f"\n{Colors.CYAN}{Colors.BOLD}Your Taste Profile:{Colors.ENDC}")
-    print(f"{Colors.CYAN}Based on: {Colors.BOLD}{taste_profile['movie']} ({taste_profile['release_date'][:4] if taste_profile['release_date'] != 'Unknown' else 'Unknown'}){Colors.ENDC}")
-    
-    if genres:
-        print(f"{Colors.CYAN}Genres: {Colors.BOLD}{', '.join(genres)}{Colors.ENDC}")
-    
-    if keywords:
-        print(f"{Colors.CYAN}Key themes: {Colors.BOLD}{', '.join(keywords[:5])}{Colors.ENDC}")
-    
-    if directors:
-        print(f"{Colors.CYAN}Director(s): {Colors.BOLD}{', '.join(directors)}{Colors.ENDC}")
-    
-    if cast:
-        print(f"{Colors.CYAN}Main cast: {Colors.BOLD}{', '.join(cast)}{Colors.ENDC}")
-    
-    # Add user preference input
-    print(f"\n{Colors.CYAN}What did you love most about {movie['title']}?{Colors.ENDC}")
-    print(f"{Colors.YELLOW}1. The genre/vibe")
-    print(f"2. The director's style")
-    print(f"3. The story/plot{Colors.ENDC}")
-    preference = input(f"{Colors.CYAN}Enter numbers (comma-separated): {Colors.ENDC}").strip()
-    
-    taste_profile["preferences"] = [p.strip() for p in preference.split(',') if p.strip() in ['1', '2', '3']]
+    # Display taste profile information (only in interactive mode)
+    if interactive:
+        print(f"Your Taste Profile:")
+        print(f"Based on: {taste_profile['movie']} ({taste_profile['release_date'][:4] if taste_profile['release_date'] != 'Unknown' else 'Unknown'})")
+        
+        if genres:
+            print(f"Genres: {', '.join(genres)}")
+        
+        if keywords:
+            print(f"Key themes: {', '.join(keywords[:5])}")
+        
+        if directors:
+            print(f"Director(s): {', '.join(directors)}")
+        
+        if cast:
+            print(f"Main cast: {', '.join(cast)}")
+        
+        # Add user preference input only in interactive mode
+        print(f"What did you love most about {movie['title']}?")
+        print(f"1. The genre/vibe")
+        print(f"2. The director's style")
+        print(f"3. The story/plot")
+        preference = input(f"Enter numbers (comma-separated): ").strip()
+        
+        taste_profile["preferences"] = [p.strip() for p in preference.split(',') if p.strip() in ['1', '2', '3']]
+    else:
+        # Default preferences when running in non-interactive mode
+        taste_profile["preferences"] = []
     
     return taste_profile
 
 def enhance_tags_with_ollama(taste_profile: Dict[str, Any]) -> List[str]:
     """Use Ollama to analyze movie details and generate more relevant tags"""
     if not check_ollama_status():
-        # The check_ollama_status function now provides detailed error messages
+        # The check_ollama_status function now provides detailed error messages via logging
         # Just return the original keywords since Ollama is not available
+        logging.info("Ollama not available, skipping tag enhancement.")
         return taste_profile.get("keywords", [])
     
     try:
         # Ollama is available, let's use it to enhance the tags
-        print(f"\n{Colors.CYAN}Enhancing movie tags with Ollama...{Colors.ENDC}")
+        logging.info("Attempting to enhance movie tags with Ollama...")
         
         # Get the existing keywords and other movie information
         keywords = taste_profile.get("keywords", [])
@@ -205,35 +440,41 @@ def enhance_tags_with_ollama(taste_profile: Dict[str, Any]) -> List[str]:
         overview = taste_profile.get("overview", "")
         genres = taste_profile.get("genres", [])
         
-        # If we have keywords, use them as a starting point
+        # --- Ollama Integration Placeholder --- 
+        # This section needs the actual Ollama API call logic.
+        # For now, it falls back to existing keywords or generates basic ones.
+        # Example prompt structure (needs implementation):
+        # prompt = f"Analyze the movie '{movie_title}' with overview: '{overview}'. Genres: {', '.join(genres)}. Existing keywords: {', '.join(keywords)}. Generate 5-10 highly relevant and specific keywords or tags describing its core themes, style, and elements. Output only a comma-separated list of keywords."
+        # ollama_response = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "stream": False})
+        # enhanced_keywords = ollama_response.json()['response'].split(',') # Simplified parsing
+        # logging.info(f"Ollama generated tags: {enhanced_keywords}")
+        # return [tag.strip() for tag in enhanced_keywords if tag.strip()]
+        # --- End Placeholder ---
+
+        # Current fallback logic:
         if keywords:
-            print(f"{Colors.CYAN}Found {len(keywords)} existing keywords to enhance.{Colors.ENDC}")
+            logging.info(f"Found {len(keywords)} existing keywords. Using them as Ollama enhancement is not yet implemented.")
             return keywords
         else:
             # If no keywords were found, generate some based on the overview
-            print(f"{Colors.CYAN}No keywords found. Generating based on movie overview.{Colors.ENDC}")
-            # Extract meaningful words from the overview as keywords
+            logging.info("No keywords found. Generating based on movie overview (basic method).")
             if overview:
-                # Simple extraction of nouns and adjectives (simplified approach)
                 import re
-                # Extract words that might be meaningful (4+ letter words)
                 potential_keywords = re.findall(r'\b[A-Za-z]{4,}\b', overview)
-                # Remove duplicates and limit to 5 keywords
                 unique_keywords = list(set(potential_keywords))[:5]
                 if unique_keywords:
-                    print(f"{Colors.GREEN}Generated {len(unique_keywords)} keywords from overview.{Colors.ENDC}")
+                    logging.info(f"Generated {len(unique_keywords)} keywords from overview: {unique_keywords}")
                     return unique_keywords
             
-            # If we still don't have keywords, use genres as keywords
             if genres:
-                print(f"{Colors.CYAN}Using genres as keywords.{Colors.ENDC}")
+                logging.info("Using genres as fallback keywords.")
                 return genres
             
-            # Last resort - return empty list
+            logging.warning("Could not generate any keywords.")
             return []
             
     except Exception as e:
-        print(f"{Colors.RED}Error using Ollama for tag enhancement: {str(e)}{Colors.ENDC}")
+        logging.error(f"Error during Ollama tag enhancement placeholder: {str(e)}")
         # Fallback to original keywords
         return taste_profile.get("keywords", [])
 
@@ -256,12 +497,12 @@ def get_movie_recommendations(movie_id: int) -> List[Dict[str, Any]]:
         response.raise_for_status()
         recommendations = response.json()
         
-        if recommendations.get("results") and len(recommendations["results"]) > 0:
-            return recommendations["results"]
-        return []
+        results = recommendations.get("results", [])
+        logging.info(f"Found {len(results)} direct recommendations for movie ID {movie_id}.")
+        return results
     
     except requests.exceptions.RequestException as e:
-        print(f"{Colors.RED}Error getting recommendations: {str(e)}{Colors.ENDC}")
+        logging.error(f"Error getting recommendations for movie ID {movie_id}: {str(e)}")
         return []
 
 # Function to get movies by genre
@@ -270,48 +511,58 @@ def get_movies_by_genre(genres: List[str]) -> List[Dict[str, Any]]:
     api_key = get_api_key()
     if not api_key:
         return []
-    
+    if not genres:
+        logging.warning("No genres provided for genre-based search.")
+        return []
+
     # Get genre IDs
     genre_url = "https://api.themoviedb.org/3/genre/movie/list"
     params = {
         "api_key": api_key,
         "language": "en-US"
     }
-    
+    genre_ids = []
     try:
         response = requests.get(genre_url, params=params)
         response.raise_for_status()
         genre_list = response.json()
         
-        genre_ids = []
         if genre_list.get("genres"):
-            for genre in genre_list["genres"]:
-                if genre["name"] in genres:
-                    genre_ids.append(genre["id"])
+            genre_map = {g['name'].lower(): g['id'] for g in genre_list["genres"]}
+            for genre_name in genres:
+                genre_id = genre_map.get(genre_name.lower())
+                if genre_id:
+                    genre_ids.append(genre_id)
         
         if not genre_ids:
+            logging.warning(f"Could not find IDs for genres: {genres}")
             return []
+        logging.info(f"Found IDs for genres: {genres} -> {genre_ids}")
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error getting genre list: {str(e)}")
+        return []
         
-        # Get movies by genre
-        discover_url = "https://api.themoviedb.org/3/discover/movie"
-        params = {
-            "api_key": api_key,
-            "language": "en-US",
-            "sort_by": "popularity.desc",
-            "with_genres": ",".join(map(str, genre_ids)),
-            "page": 1
-        }
-        
+    # Get movies by genre
+    discover_url = "https://api.themoviedb.org/3/discover/movie"
+    params = {
+        "api_key": api_key,
+        "language": "en-US",
+        "sort_by": "popularity.desc",
+        "with_genres": ",".join(map(str, genre_ids)),
+        "page": 1
+    }
+    
+    try:
         response = requests.get(discover_url, params=params)
         response.raise_for_status()
         discovered_movies = response.json()
-        
-        if discovered_movies.get("results") and len(discovered_movies["results"]) > 0:
-            return discovered_movies["results"]
-        return []
+        results = discovered_movies.get("results", [])
+        logging.info(f"Found {len(results)} movies for genres: {genres}")
+        return results
     
     except requests.exceptions.RequestException as e:
-        print(f"{Colors.RED}Error getting movies by genre: {str(e)}{Colors.ENDC}")
+        logging.error(f"Error getting movies by genre IDs {genre_ids}: {str(e)}")
         return []
 
 # Function to get movies by keyword
@@ -319,32 +570,40 @@ def get_movies_by_keyword(keywords: List[str], limit: int = 3) -> List[Dict[str,
     """Get movie recommendations based on keywords"""
     api_key = get_api_key()
     if not api_key or not keywords:
+        if not keywords:
+            logging.warning("No keywords provided for keyword-based search.")
         return []
     
-    # Limit the number of keywords to search for
     search_keywords = keywords[:limit]
+    logging.info(f"Searching for movies based on keywords: {search_keywords}")
     all_results = []
-    
+    keyword_ids_found = {} # Cache found keyword IDs
+
+    # Pre-fetch keyword IDs if possible (reduces redundant API calls)
+    # This part is optional optimization
+
     for keyword in search_keywords:
+        keyword_id = None
         try:
-            # First search for the keyword ID
-            keyword_search_url = "https://api.themoviedb.org/3/search/keyword"
-            params = {
-                "api_key": api_key,
-                "query": keyword,
-                "page": 1
-            }
+            # Search for the keyword ID
+            if keyword.lower() in keyword_ids_found:
+                keyword_id = keyword_ids_found[keyword.lower()]
+            else:
+                keyword_search_url = "https://api.themoviedb.org/3/search/keyword"
+                params = {"api_key": api_key, "query": keyword, "page": 1}
+                response = requests.get(keyword_search_url, params=params)
+                response.raise_for_status()
+                keyword_results = response.json()
+                
+                if keyword_results.get("results") and len(keyword_results["results"]) > 0:
+                    keyword_id = keyword_results["results"][0]["id"]
+                    keyword_ids_found[keyword.lower()] = keyword_id # Cache it
+                    logging.info(f"Found keyword ID for '{keyword}': {keyword_id}")
+                else:
+                    logging.warning(f"Could not find keyword ID for '{keyword}'.")
+                    continue # Skip this keyword if ID not found
             
-            response = requests.get(keyword_search_url, params=params)
-            response.raise_for_status()
-            keyword_results = response.json()
-            
-            if not keyword_results.get("results") or len(keyword_results["results"]) == 0:
-                continue
-            
-            keyword_id = keyword_results["results"][0]["id"]
-            
-            # Then get movies with that keyword
+            # Get movies with that keyword ID
             discover_url = "https://api.themoviedb.org/3/discover/movie"
             params = {
                 "api_key": api_key,
@@ -358,11 +617,13 @@ def get_movies_by_keyword(keywords: List[str], limit: int = 3) -> List[Dict[str,
             response.raise_for_status()
             discovered_movies = response.json()
             
-            if discovered_movies.get("results") and len(discovered_movies["results"]) > 0:
-                all_results.extend(discovered_movies["results"][:5])  # Take top 5 from each keyword
+            keyword_movie_results = discovered_movies.get("results", [])
+            if keyword_movie_results:
+                logging.info(f"Found {len(keyword_movie_results)} movies for keyword '{keyword}' (ID: {keyword_id}). Adding top 5.")
+                all_results.extend(keyword_movie_results[:5])
         
         except requests.exceptions.RequestException as e:
-            print(f"{Colors.YELLOW}Error searching for keyword '{keyword}': {str(e)}{Colors.ENDC}")
+            logging.error(f"Error searching for keyword '{keyword}' or its movies: {str(e)}")
             continue
     
     # Remove duplicates based on movie ID
@@ -371,156 +632,112 @@ def get_movies_by_keyword(keywords: List[str], limit: int = 3) -> List[Dict[str,
         if movie["id"] not in unique_movies:
             unique_movies[movie["id"]] = movie
     
-    return list(unique_movies.values())
+    final_list = list(unique_movies.values())
+    logging.info(f"Found {len(final_list)} unique movies across keywords: {search_keywords}")
+    return final_list
 
-# Function to get personalized recommendations using Ollama
+# Function to get personalized recommendations (placeholder for Ollama ranking)
 def get_ollama_recommendations(taste_profile: Dict[str, Any], all_recommendations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Use Ollama to rank and personalize recommendations"""
-    # Check if we have recommendations to work with
+    """Rank and personalize recommendations. Placeholder for Ollama integration."""
     if not all_recommendations:
-        print(f"\n{Colors.YELLOW}No recommendations found to personalize.{Colors.ENDC}")
+        logging.warning("No recommendations provided to personalize.")
         return []
     
-    # Check Ollama status - but continue with local ranking regardless
-    ollama_available = check_ollama_status()
+    ollama_available = check_ollama_status() # Check status but don't rely on it yet
     
-    # Always personalize recommendations, with or without Ollama
-    print(f"\n{Colors.CYAN}Personalizing recommendations based on your preferences...{Colors.ENDC}")
+    logging.info("Personalizing recommendations based on taste profile (using basic scoring)...")
     
     try:
-        # Create a scoring system based on user preferences
+        # --- Ollama Ranking Placeholder ---
+        # This section needs the actual Ollama API call for ranking.
+        # Example prompt structure (needs implementation):
+        # movie_list_str = "\n".join([f"- {m['title']} ({m.get('release_date', 'N/A')[:4]}): {m.get('overview', '')[:100]}..." for m in all_recommendations])
+        # prompt = f"Based on this taste profile (liked movie: {taste_profile['movie']}, genres: {taste_profile['genres']}, keywords: {taste_profile.get('enhanced_keywords', taste_profile['keywords'])}, preferences: {taste_profile['preferences']}), rank the following movie recommendations for relevance:\n{movie_list_str}\nOutput only the list of movie titles in the best order."
+        # ollama_response = requests.post("http://localhost:11434/api/generate", json={"model": "llama3", "prompt": prompt, "stream": False})
+        # ranked_titles = ollama_response.json()['response'].split('\n') # Simplified parsing
+        # ranked_movies = sorted(all_recommendations, key=lambda m: ranked_titles.index(m['title']) if m['title'] in ranked_titles else 999)
+        # logging.info("Recommendations ranked using Ollama.")
+        # return ranked_movies[:10]
+        # --- End Placeholder ---
+
+        # Current fallback: Simple scoring based on profile (without Ollama)
         scored_recommendations = []
-        
-        # Get user preferences
-        preferences = taste_profile.get('preferences', [])
-        genres = taste_profile.get('genres', [])
-        keywords = taste_profile.get('keywords', [])
-        directors = taste_profile.get('directors', [])
-        cast = taste_profile.get('cast', [])
-        
-        # Get enhanced keywords if available
-        enhanced_keywords = taste_profile.get('enhanced_keywords', [])
-        if enhanced_keywords:
-            keywords = enhanced_keywords
-        
+        preferences = taste_profile.get('preferences', []) # Preferences from interactive mode, might be empty
+        liked_genres = taste_profile.get('genres', [])
+        liked_keywords = taste_profile.get('enhanced_keywords', taste_profile.get('keywords', []))
+        # liked_directors = taste_profile.get('directors', []) # Not used in current scoring
+        # liked_cast = taste_profile.get('cast', []) # Not used in current scoring
+
+        # Fetch genre map once if needed for ID matching
+        genre_map_by_id = {}
+        if any(m.get('genre_ids') and not m.get('genres') for m in all_recommendations):
+            api_key = get_api_key()
+            if api_key:
+                genre_url = "https://api.themoviedb.org/3/genre/movie/list"
+                try:
+                    response = requests.get(genre_url, params={"api_key": api_key, "language": "en-US"})
+                    response.raise_for_status()
+                    genre_list = response.json()
+                    if genre_list.get("genres"):
+                        genre_map_by_id = {g['id']: g['name'] for g in genre_list["genres"]}
+                except requests.exceptions.RequestException as e:
+                    logging.warning(f"Could not fetch genre list for ID mapping: {e}")
+
         for movie in all_recommendations:
             score = 0
+            # Base score for being included
+            score += 50 
             
-            # Base score - all movies start with some relevance
-            score += 50
+            # Score based on vote average (scaled)
+            score += min(15, (movie.get('vote_average', 0) or 0) * 1.5) # Max 15 points
             
-            # Add score based on vote average (0-10 points)
-            score += min(10, movie.get('vote_average', 0))
+            # Score based on popularity (log scaled, simple version)
+            score += min(10, (movie.get('popularity', 0) or 0) ** 0.5 / 5) # Max 10 points
+
+            # Check for genre matches (more points if preferred)
+            movie_genres_names = []
+            if movie.get('genres'): # Full genre info available
+                 movie_genres_names = [genre['name'] for genre in movie.get('genres', [])]
+            elif movie.get('genre_ids') and genre_map_by_id: # Only IDs available, use map
+                movie_genres_names = [genre_map_by_id.get(gid) for gid in movie.get('genre_ids', []) if genre_map_by_id.get(gid)]
             
-            # Check for genre matches (up to 15 points)
-            movie_genres = [genre['name'] for genre in movie.get('genres', [])] if movie.get('genres') else []
-            if not movie_genres and movie.get('genre_ids'):
-                # We only have genre IDs, not full genre objects
-                # This is a simplified approach - in a real app, we'd map IDs to names
-                score += min(15, 5)  # Add some points for potential genre match
-            else:
-                for genre in genres:
-                    if genre in movie_genres:
-                        score += 3  # 3 points per matching genre
-                        if '1' in preferences:  # User prefers genre/vibe
-                            score += 2  # Extra points for preference match
-            
-            # Add to scored recommendations
+            genre_match_score = 0
+            for liked_genre in liked_genres:
+                if liked_genre in movie_genres_names:
+                    genre_match_score += 3
+                    if '1' in preferences: # User prefers genre/vibe (from interactive mode)
+                        genre_match_score += 2
+            score += min(20, genre_match_score) # Max 20 points for genres
+
+            # Keyword matching (simple check, could be improved with embeddings)
+            # This requires fetching keywords for each recommended movie - expensive!
+            # Skipping keyword scoring for API efficiency for now.
+
+            # Director/Cast matching (also requires fetching credits - expensive)
+            # Skipping for now.
+
             scored_recommendations.append({
                 **movie,
-                'relevance_score': min(100, score)  # Cap at 100
+                'relevance_score': min(100, round(score)) # Cap at 100
             })
         
         # Sort by relevance score
         sorted_recommendations = sorted(scored_recommendations, key=lambda x: x.get('relevance_score', 0), reverse=True)
         
-        # Show personalization method used
         if ollama_available:
-            print(f"{Colors.GREEN}Recommendations enhanced with Ollama integration.{Colors.ENDC}")
+            logging.info("Using built-in scoring engine. Ollama ranking not implemented yet.")
         else:
-            print(f"{Colors.YELLOW}Using built-in recommendation engine (Ollama not available).{Colors.ENDC}")
+            logging.info("Using built-in scoring engine (Ollama not available).")
         
-        return sorted_recommendations[:10]  # Return top 10 results
+        return sorted_recommendations[:10]
     
     except Exception as e:
-        print(f"{Colors.RED}Error in recommendation ranking: {str(e)}{Colors.ENDC}")
-        print(f"{Colors.YELLOW}Falling back to basic recommendation sorting.{Colors.ENDC}")
-        # Sort by popularity and vote average as a fallback
+        logging.error(f"Error in recommendation ranking: {str(e)}", exc_info=True) # Log traceback
+        logging.warning("Falling back to basic recommendation sorting by popularity/rating.")
+        # Fallback sorting
         return sorted(all_recommendations, 
-                      key=lambda x: (x.get('popularity', 0) + x.get('vote_average', 0) * 10), 
+                      key=lambda x: ((x.get('popularity', 0) or 0) + (x.get('vote_average', 0) or 0) * 10), 
                       reverse=True)[:10]
 
-# Add main function to tie everything together
-def main():
-    # Check API key first
-    if not get_api_key():
-        return
-    
-    # Get user input
-    movie_title, year = get_movie_input()
-    
-    # Search for movie
-    movie = search_movie(movie_title, year)
-    if not movie:
-        return
-    
-    # Get detailed movie info
-    movie_details = get_movie_details(movie["id"])
-    if not movie_details:
-        return
-    
-    # Create taste profile
-    taste_profile = create_taste_profile(movie, movie_details)
-    
-    # Enhance with Ollama tags
-    enhanced_tags = enhance_tags_with_ollama(taste_profile)
-    if enhanced_tags:
-        taste_profile["enhanced_keywords"] = enhanced_tags
-    
-    # Gather recommendations from all methods
-    all_recommendations = []
-    
-    # 1. Direct movie recommendations
-    all_recommendations.extend(get_movie_recommendations(movie["id"]))
-    
-    # 2. Genre-based recommendations
-    all_recommendations.extend(get_movies_by_genre(taste_profile["genres"]))
-    
-    # 3. Keyword-based recommendations
-    keywords = taste_profile.get("enhanced_keywords", taste_profile["keywords"])
-    all_recommendations.extend(get_movies_by_keyword(keywords))
-    
-    # Remove duplicates
-    seen_ids = set()
-    unique_recommendations = []
-    for movie in all_recommendations:
-        if movie["id"] not in seen_ids:
-            seen_ids.add(movie["id"])
-            unique_recommendations.append(movie)
-    
-    # Get personalized rankings
-    final_recommendations = get_ollama_recommendations(taste_profile, unique_recommendations)
-    
-    # Display results
-    print(f"\n{Colors.HEADER}{Colors.BOLD}🎉 Your Movie Recommendations 🎉{Colors.ENDC}")
-    shown_movies = set()
-    count = 0
-    
-    for movie in final_recommendations:
-        # Prevent duplicate titles
-        clean_title = movie['title'].lower().strip()
-        if clean_title in shown_movies:
-            continue
-        shown_movies.add(clean_title)
-        count += 1
-        
-        print(f"\n{Colors.BLUE}{count}. {movie['title']} ({movie.get('release_date', 'Unknown')[:4]}){Colors.ENDC}")
-        print(f"{Colors.CYAN}   Rating: {movie.get('vote_average', 'N/A')}/10{Colors.ENDC}")
-        print(f"{Colors.CYAN}   Overview: {movie['overview'][:150]}...{Colors.ENDC}")
-        
-        # Only show 10 movies
-        if count >= 10:
-            break
-
-if __name__ == "__main__":
-    main()
+# Removed main() function and if __name__ == '__main__': block
+# This script is now intended to be imported as a module by app.py
