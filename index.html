@@ -1,0 +1,61 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Movie Recommendation</title><style>body { background: #141414; color: #fff; font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; min-height: 100vh; } .container { max-width: 400px; margin: 60px auto; background: #181818; border-radius: 8px; box-shadow: 0 2px 16px rgba(0,0,0,0.7); padding: 32px 24px; } h1 { color: #e50914; text-align: center; margin-bottom: 24px; font-size: 2rem; } label { display: block; margin-bottom: 8px; font-weight: bold; } input[type="text"] { width: 100%; padding: 10px; border: none; border-radius: 4px; margin-bottom: 16px; background: #222; color: #fff; font-size: 1rem; } button { width: 100%; background: #e50914; color: #fff; border: none; border-radius: 4px; padding: 12px; font-size: 1rem; font-weight: bold; cursor: pointer; transition: background 0.2s; } button:hover { background: #b0060f; } .recommendations { margin-top: 32px; } .recommendation { background: #232323; border-radius: 4px; padding: 12px 16px; margin-bottom: 12px; } .recommendation-title { color: #e50914; font-weight: bold; font-size: 1.1rem; } .recommendation-overview { color: #ccc; font-size: 0.95rem; margin-top: 4px; } </style></head><body><div class="container"><h1>AI Movie Recommender</h1><form id="movieForm"><label for="movie">Movie Name</label><input type="text" id="movie" name="movie" placeholder="Enter a movie you like" required><button type="submit">Get Recommendations</button></form><div class="recommendations" id="recommendations"></div></div><script>
+document.getElementById('movieForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const movieInput = document.getElementById('movie');
+    const movie = movieInput.value.trim();
+    const recDiv = document.getElementById('recommendations');
+    const submitButton = this.querySelector('button');
+
+    if (!movie) {
+        recDiv.innerHTML = '<div style="color:#e50914;">Please enter a movie name.</div>';
+        return;
+    }
+
+    // Disable button and show loading state
+    submitButton.disabled = true;
+    submitButton.textContent = 'Getting Recommendations...';
+    recDiv.innerHTML = '<div style="color:#ccc;">Loading...</div>'; // Loading indicator
+
+    try {
+        const response = await fetch('/recommend', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ movie: movie })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `Server error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.recommendations && data.recommendations.length > 0) {
+            recDiv.innerHTML = ''; // Clear loading/previous results
+            data.recommendations.forEach(rec => {
+                const recElement = document.createElement('div');
+                recElement.className = 'recommendation';
+                recElement.innerHTML = `
+                    <div class='recommendation-title'>${rec.title} (${rec.year || 'N/A'})</div>
+                    <div class='recommendation-overview'>Rating: ${rec.rating || 'N/A'} | ${rec.overview ? rec.overview.substring(0, 150) + '...' : 'No overview available.'}</div>
+                `;
+                recDiv.appendChild(recElement);
+            });
+        } else {
+            recDiv.innerHTML = '<div style="color:#ccc;">No recommendations found. Try another movie!</div>';
+        }
+
+    } catch (error) {
+        console.error('Error fetching recommendations:', error);
+        recDiv.innerHTML = `<div style="color:#e50914;">Error: ${error.message}. Please check the console or try again later.</div>`;
+    } finally {
+        // Re-enable button
+        submitButton.disabled = false;
+        submitButton.textContent = 'Get Recommendations';
+    }
+});
+</script>
+</body>
+</html>
